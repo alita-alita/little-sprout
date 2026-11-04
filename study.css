@@ -13,3 +13,22 @@
 .voice-settings label{display:block;margin:12px 0;font-size:13px}
 .voice-settings select{display:block;margin-top:6px;width:100%;min-width:0;max-width:100%;min-height:44px;border:1px solid #d6dfcb;border-radius:10px;background:white;padding:8px;color:#344d2a;font:inherit}
 .voice-tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.voice-playback-status{font-size:12px;color:#61764f;text-align:center;min-height:0;margin:4px 0}
+.voice-playback-status:empty{display:none}
+.character-options .answer-tile>span{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;font-size:56px;font-weight:500;line-height:1.4}
+.story-scene.character-scene{font-size:30px;letter-spacing:2px;line-height:1.6;padding:18px 12px}
+.pictograph{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;color:#9b7448;flex-shrink:0;gap:3px}
+.pictograph svg{width:64px;height:64px}
+.pictograph small{font-size:10px;font-weight:400;letter-spacing:1px;line-height:1.5;color:#9b8b70}
+.word-display>.pictograph{margin-left:14px;padding:8px 14px;border-radius:18px;background:#f4eddf}
+.word-display>.pictograph svg{width:70px;height:70px}
+.character-options .answer-tile{flex-direction:row;gap:10px;flex-wrap:wrap}
+.character-options .answer-tile>.pictograph{font-size:initial;line-height:1;max-width:74px}
+.character-options .pictograph svg{width:49px;height:49px}
+@media(max-width:365px){.character-options .answer-tile{gap:5px}.character-options .pictograph svg{width:38px;height:38px}.character-options .pictograph small{font-size:9px;letter-spacing:0}.word-display>.pictograph{margin-left:5px;padding:8px}}
+.character-visual{display:flex;justify-content:center;align-items:center;gap:24px;margin:20px 0 18px;min-height:116px}
+.character-visual>.pictograph{width:105px;height:105px;background:#f4eddf;border-radius:22px}
+.character-visual>.pictograph svg{width:77px;height:77px}
+.character-picture{display:grid;place-items:center;min-width:105px;min-height:105px;font-size:73px;line-height:1.2;max-width:70%;overflow-wrap:anywhere}
+.character-options .answer-tile{gap:0}
+@media(max-width:365px){.character-visual{gap:17px}.character-visual>.pictograph{width:90px;height:90px}.character-visual>.pictograph svg{width:65px;height:65px}.character-picture{min-width:90px;min-height:90px;font-size:64px}}

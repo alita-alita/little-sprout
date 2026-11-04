@@ -126,7 +126,7 @@ class Handler(SimpleHTTPRequestHandler):
                 revision, payload, updated = connection.execute('SELECT revision,payload,updated FROM state WHERE id=1').fetchone()
             return self.json_response(200, {'revision': revision, 'state': json.loads(payload), 'updated': updated, 'token': self.server.token})
         # Explicit static allowlist prevents serving the database or Python source.
-        if not re.fullmatch(r'/assets/audio/en/[a-f0-9]{24}\.wav', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/english-audio.js', '/model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
+        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
             return self.json_response(404, {'error': '页面不存在'})
         if path == '/favicon.ico':
             self.send_response(204)
