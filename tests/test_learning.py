@@ -34,9 +34,31 @@ def finish(state, subject, now=NOW, day=1):
         answers=q['answer'] if q['kind']=='order' else [q['answer']]
         for answer in answers:
             result=learn.apply_event(state,event(subject,'answer',q['id'],answer,day),now)
+        if subject in ['english','chinese']:
+            result=learn.apply_event(state,dict(event(subject,'repeat',q['id'],day=day),transcript=q['speech']),now)
     return result
 
 class LearningTests(unittest.TestCase):
+    def test_follow_along_required_before_next_and_saved_score_is_validated(self):
+        state=fixture(subjects=['english']);learn.apply_event(state,event(),NOW)
+        with self.assertRaises(ValueError):learn.apply_event(state,dict(event(action='repeat',question='w0'),transcript='apple'),NOW)
+        q=learn.questions(learn.LESSONS['english-1'])[0]
+        result=learn.apply_event(state,event(action='answer',question='w0',answer=q['answer']),NOW)
+        self.assertEqual(result['feedback'],'repeat');self.assertFalse(result['autoChecked'])
+        with self.assertRaises(ValueError):learn.apply_event(state,event(action='answer',question='w1',answer='🍌'),NOW)
+        result=learn.apply_event(state,dict(event(action='repeat',question='w0'),transcript='banana'),NOW)
+        self.assertEqual(result['feedback'],'repeat-try')
+        result=learn.apply_event(state,dict(event(action='repeat',question='w0'),transcript='Apple.'),NOW)
+        self.assertEqual(result['score'],100)
+        step=state['plans'][0]['records']['1']['study']['english']['steps']['w0'];self.assertEqual(step['repeat']['attempts'],2)
+        server.validate(state)
+        step['repeat']['score']=99
+        with self.assertRaises(ValueError):server.validate(state)
+
+    def test_matching_score_is_not_a_pronunciation_score(self):
+        for target,heard,expected in [('Apple.','apple',100),('cat','car',67),('月','山',0),('一','1',100),('目','木',100),('树木长高了。','树木长高了',100)]:
+            self.assertEqual(learn.repeat_score(target,heard),expected)
+
     def test_course_structure_and_eight_thinking_abilities(self):
         for lesson in learn.LESSONS.values():
             if lesson['type'] in ['english','chinese']:
@@ -60,6 +82,8 @@ class LearningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             learn.apply_event(state,event(action='answer',question='w1',answer='🍌'),NOW)
         learn.apply_event(state,event(action='answer',question='w0',answer=q['answer']),NOW)
+        self.assertFalse(step['correct']);self.assertTrue(step['choiceCorrect'])
+        learn.apply_event(state,dict(event(action='repeat',question='w0'),transcript=q['speech']),NOW)
         self.assertTrue(step['correct']);self.assertTrue(step['hinted'])
 
     def test_all_three_subjects_auto_check_without_sport(self):
@@ -75,6 +99,7 @@ class LearningTests(unittest.TestCase):
         state=fixture(subjects=['english']);learn.apply_event(state,event(),NOW)
         q=learn.questions(learn.LESSONS['english-1'])[0]
         learn.apply_event(state,event(action='answer',question='w0',answer=q['answer']),NOW)
+        learn.apply_event(state,dict(event(action='repeat',question='w0'),transcript=q['speech']),NOW)
         tomorrow=NOW+dt.timedelta(days=1)
         learn.apply_event(state,event(day=2),tomorrow)
         entry=state['plans'][0]['records']['2']['study']['english']
@@ -158,5 +183,18 @@ class EventApiTests(unittest.TestCase):
         self.assertEqual(self.call('/api/state')[1]['state'],after['state'])
         changed=dict(answer,answer=q['answer'])
         self.assertEqual(self.call(body=changed)[0],400)
+
+    def test_repeat_score_is_saved_idempotently_and_blocks_next_question(self):
+        _,opened=self.call(body=dict(event(),eventId=secrets.token_hex(12),revision=0))
+        q=learn.questions(learn.LESSONS['english-1'])[0]
+        _,answer=self.call(body=dict(event(action='answer',question='w0',answer=q['answer']),eventId=secrets.token_hex(12),revision=opened['revision']))
+        self.assertEqual(answer['result']['feedback'],'repeat')
+        self.assertEqual(self.call(body=dict(event(action='answer',question='w1',answer='🍌'),eventId=secrets.token_hex(12),revision=answer['revision']))[0],400)
+        body=dict(event(action='repeat',question='w0'),transcript='Apple',eventId=secrets.token_hex(12),revision=answer['revision'])
+        status,passed=self.call(body=body);self.assertEqual(status,200);self.assertEqual(passed['result']['score'],100)
+        _,repeated=self.call(body=body);self.assertEqual(repeated['revision'],passed['revision'])
+        server.initialize(self.db);_,saved=self.call('/api/state')
+        step=saved['state']['plans'][0]['records']['1']['study']['english']['steps']['w0']
+        self.assertTrue(step['correct']);self.assertEqual(step['repeat']['attempts'],1);self.assertEqual(step['repeat']['score'],100)
 
 if __name__=='__main__':unittest.main()

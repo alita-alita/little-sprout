@@ -32,3 +32,18 @@
 .character-picture{display:grid;place-items:center;min-width:105px;min-height:105px;font-size:73px;line-height:1.2;max-width:70%;overflow-wrap:anywhere}
 .character-options .answer-tile{gap:0}
 @media(max-width:365px){.character-visual{gap:17px}.character-visual>.pictograph{width:90px;height:90px}.character-visual>.pictograph svg{width:65px;height:65px}.character-picture{min-width:90px;min-height:90px;font-size:64px}}
+.repeat-panel{margin:18px 0;padding:18px;border:1px solid #d9e3cc;border-radius:20px;background:#f0f5e8;text-align:center}
+.repeat-panel h3{font-size:19px}.repeat-target{font-size:24px;font-weight:600;line-height:1.6;margin:12px 0;overflow-wrap:anywhere}
+.repeat-description,.repeat-live{font-size:13px;line-height:1.8;color:#6d825b;margin:10px 0}
+.repeat-panel .repeat-mic{margin-top:14px;min-height:52px}.repeat-mic:disabled{opacity:.55}
+.repeat-score{padding:15px 10px;margin:12px 0;background:#fff9e8;border-radius:16px}.repeat-score.passed{background:#e1edcf}
+.repeat-score strong{display:block;font-size:38px;color:#5f7e46}.repeat-score strong small{font-size:15px;margin-left:5px}.repeat-score>span{font-size:13px}.repeat-score p{font-size:14px;margin:10px 0;overflow-wrap:anywhere}
+.repeat-score>small,.repeat-privacy{display:block;font-size:11px;line-height:1.8;color:#7d8b6f;margin-top:10px}.repeat-error{font-size:13px;line-height:1.8;color:#9d6634;background:#fff0d7;padding:12px;border-radius:12px;margin-top:10px}
+.auth-required .sidebar,.auth-required .family-aside,.auth-required #family-aside,.auth-required .studio-footer,.auth-required .studio-header{display:none}
+.auth-required .studio{display:block;max-width:520px;margin:0 auto}
+.auth-required .workspace{display:block}
+.auth-required #app{min-height:85dvh}
+.family-login{padding-top:50px!important}
+.family-login input{width:100%;min-height:54px;padding:12px 16px;border:1px solid #d9dece;border-radius:16px;background:#fff;font:inherit;box-sizing:border-box}
+.family-login #login-error{color:#a83b32;min-height:24px}
+.family-login .primary-btn{margin-top:20px}

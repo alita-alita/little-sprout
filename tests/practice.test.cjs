@@ -1,7 +1,7 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');const path=require('node:path');
 function setup(type='english'){
   const storage=new Map(),spoken=[],ctx={crypto:require('node:crypto').webcrypto,console,icon:()=>'',document:{addEventListener(){},querySelector:()=>({scrollTop:0})},SproutSpeech:{play:parts=>{spoken.push(parts);return Promise.resolve(true);},stop(){},preferences:{},voices:()=>[],choose:()=>null},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}};
-  vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../study-model.js'),'utf8'),ctx);ctx.StudyModel.catalog=require('../curriculum.json');
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../repeat.js'),'utf8'),ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../study-model.js'),'utf8'),ctx);ctx.StudyModel.catalog=require('../curriculum.json');
   const lesson=ctx.StudyModel.lesson({lessonId:type+'-1'}),entry={lessonId:lesson.id,steps:{}};ctx.StudyModel.questions(lesson).forEach(q=>entry.steps[q.id]={correct:true});
   const plan={id:'test',records:{1:{study:{[type]:entry}}}},original=JSON.stringify(plan);let requests=0;
   ctx.SproutModel={stats:()=>({today:1,ended:false}),full:()=>true};vm.runInContext(fs.readFileSync(path.join(__dirname,'../study-ui.js'),'utf8'),ctx);
@@ -11,7 +11,7 @@ function setup(type='english'){
 test('replay resets answer controls, retries and hints without altering saved check-in',async()=>{
   const t=setup(),{U}=t;U.beginPractice();assert.match(U.render(),/复习练习/);assert.equal(Object.keys(U.practice.steps).length,0);
   const q=t.lesson.units[0].questions[0];await U.submit('answer',q.options.find(x=>x!==q.answer));assert.equal(U.practice.steps[q.id].correct,false);assert.doesNotMatch(U.render(),/data-study-action="next"/);
-  await U.submit('hint');assert.equal(U.practice.steps[q.id].hinted,true);await U.submit('answer',q.answer);assert.equal(U.practice.steps[q.id].correct,true);assert.match(U.render(),/data-study-action="next"/);
+  await U.submit('hint');assert.equal(U.practice.steps[q.id].hinted,true);await U.submit('answer',q.answer);assert.equal(U.practice.steps[q.id].choiceCorrect,true);assert.equal(U.practice.steps[q.id].correct,false);await U.saveRepeat(q.speech);assert.equal(U.practice.steps[q.id].correct,true);assert.match(U.render(),/data-study-action="next"/);
   assert.equal(JSON.stringify(t.plan),t.original);assert.equal(t.requests(),0);
   U.select('english',1);assert.equal(U.practice.steps[q.id].correct,true);
 });
@@ -27,7 +27,7 @@ test('Chinese choices pronounce the selected character before feedback, includin
   await U.submit('answer',q.answer);assert.equal(requests,1);assert.equal(t.spoken.at(-2)[0].text,'日');assert.equal(t.spoken.at(-1)[0].text,'真棒，找到了。');
 });
 test('all replay questions can be completed and another fresh replay can begin',async()=>{
-  const t=setup(),{U}=t;U.beginPractice();for(const q of t.ctx.StudyModel.questions(t.lesson)){U.qid=q.id;await U.submit('answer',q.answer);await U.handle({dataset:{studyAction:'next'}});}
+  const t=setup(),{U}=t;U.beginPractice();for(const q of t.ctx.StudyModel.questions(t.lesson)){U.qid=q.id;await U.submit('answer',q.answer);await U.saveRepeat(q.speech);await U.handle({dataset:{studyAction:'next'}});}
   assert.equal(U.screen,'finish');assert.match(U.render(),/又完成一次/);assert.match(U.render(),/再来一次/);assert.equal(JSON.stringify(t.plan),t.original);
   await U.handle({dataset:{studyAction:'replay'}});assert.equal(U.qid,'w0');assert.equal(Object.keys(U.practice.steps).length,0);
 });
@@ -60,6 +60,14 @@ test('ordinary learning starts word playback before saving and gives feedback on
   const submission=U.submit('answer',t.lesson.units[0].questions[0].answer);
   assert.deepEqual(order,['apple','save']);finishSave({feedback:'correct'});await Promise.resolve();await Promise.resolve();assert.deepEqual(order,['apple','save']);
   finishWord(true);await submission;assert.deepEqual(order,['apple','save','真棒，找到了。']);
+});
+test('follow-along blocks next until an 80-point match and retains scores on reopening',async()=>{
+  const t=setup(),{U}=t;U.beginPractice();const q=t.lesson.units[0].questions[0];await U.submit('answer',q.answer);
+  assert.equal(U.practice.steps.w0.correct,false);assert.match(U.render(),/跟读练习/);assert.doesNotMatch(U.render(),/data-study-action="next"/);
+  await U.handle({dataset:{studyAction:'next'}});assert.equal(U.qid,'w0');
+  await U.saveRepeat('banana');assert.equal(U.practice.steps.w0.repeat.passed,false);assert.doesNotMatch(U.render(),/data-study-action="next"/);
+  await U.saveRepeat('apple');assert.equal(U.practice.steps.w0.repeat.score,100);assert.equal(U.practice.steps.w0.repeat.attempts,2);assert.equal(U.practice.steps.w0.correct,true);
+  U.select('english',1);assert.equal(U.practice.steps.w0.repeat.score,100);assert.equal(JSON.stringify(t.plan),t.original);
 });
 test('math ordering stores each practice selection and enforces order',()=>{
   const t=setup('math'),{U}=t;U.beginPractice();const lesson=t.ctx.StudyModel.catalog.lessons['math-6'];

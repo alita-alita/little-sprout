@@ -114,6 +114,13 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    @property
+    def request_token(self):
+        return self.server.token
+
+    def expected_origin(self):
+        return f'http://{self.headers.get("Host", "")}'
+
     def allowed(self):
         return self.headers.get('Host') in [f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}']
 
@@ -124,9 +131,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/state':
             with connect(self.server.db) as connection:
                 revision, payload, updated = connection.execute('SELECT revision,payload,updated FROM state WHERE id=1').fetchone()
-            return self.json_response(200, {'revision': revision, 'state': json.loads(payload), 'updated': updated, 'token': self.server.token})
+            return self.json_response(200, {'revision': revision, 'state': json.loads(payload), 'updated': updated, 'token': self.request_token, 'cloud': bool(getattr(self.server, 'cloud', False))})
         # Explicit static allowlist prevents serving the database or Python source.
-        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
+        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/repeat.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
             return self.json_response(404, {'error': '页面不存在'})
         if path == '/favicon.ico':
             self.send_response(204)
@@ -134,8 +141,8 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_PUT(self):
-        expected_origin = f'http://{self.headers.get("Host", "")}'
-        if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.server.token:
+        expected_origin = self.expected_origin()
+        if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.request_token:
             return self.json_response(403, {'error': '请从本机应用重新打开后保存'})
         if self.path != '/api/state':
             return self.json_response(404, {'error': '接口不存在'})
@@ -174,8 +181,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json_response(503, {'error': '数据库暂时无法保存，请稍后重试；当前输入仍保留'})
 
     def do_POST(self):
-        expected_origin = f'http://{self.headers.get("Host", "")}'
-        if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.server.token:
+        expected_origin = self.expected_origin()
+        if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.request_token:
             return self.json_response(403, {'error': '请重新打开本机应用后继续学习'})
         if self.path != '/api/study-event':
             return self.json_response(404, {'error': '接口不存在'})

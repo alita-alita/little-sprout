@@ -2,11 +2,26 @@
 import copy
 import datetime as dt
 import json
+import unicodedata
 from pathlib import Path
 
 CATALOG = json.loads(Path(__file__).with_name('curriculum.json').read_text(encoding='utf-8'))
 LESSONS = CATALOG['lessons']
 SUBJECTS = {'english', 'chinese', 'math'}
+
+def repeat_score(target, heard):
+    digits=str.maketrans('0123456789','零一二三四五六七八九')
+    def norm(value):
+        return ''.join(c for c in unicodedata.normalize('NFKC',value).lower().translate(digits) if c.isalnum())
+    a,b=norm(target),norm(heard)
+    if a=='目' and b=='木' or a=='长' and b in ['常','肠','场','厂']:b=a
+    if not a or not b:return 0
+    row=list(range(len(b)+1))
+    for i,x in enumerate(a,1):
+        new=[i]
+        for j,y in enumerate(b,1):new.append(min(row[j]+1,new[j-1]+1,row[j-1]+(x!=y)))
+        row=new
+    return int(100*(1-row[-1]/max(len(a),len(b)))+.5)
 
 def require(value, message):
     if not value:
@@ -43,7 +58,7 @@ def ensure_entry(state, plan, day, subject):
     previous.sort(key=lambda value: value[:3])
     last = previous[-1][3] if previous else None
     index = min(90, int(last['lessonId'].split('-')[-1]) + (1 if complete(last) else 0)) if last else 1
-    entry = {'lessonId': f'{subject}-{index}', 'steps': {}}
+    entry = {'lessonId': f'{subject}-{index}', 'steps': {}, 'repeatRequired': subject in ['english','chinese']}
     if last and not complete(last):
         entry['steps'] = copy.deepcopy(last['steps'])
         entry['continued'] = True
@@ -64,6 +79,8 @@ def apply_event(state, body, now=None):
     require(subject in settings['subjects'], '这个方向不在本期每日目标中')
     state['selectedPlanId'] = plan['id']
     entry = ensure_entry(state, plan, day, subject)
+    if subject in ['english','chinese'] and not complete(entry):
+        entry['repeatRequired']=True
     if body.get('action') == 'open':
         return {'feedback': 'opened', 'autoChecked': day_complete(plan, day)}
     lesson = LESSONS[entry['lessonId']]
@@ -76,11 +93,26 @@ def apply_event(state, body, now=None):
     next_question = next((q for q in all_questions if not entry['steps'].get(q['id'], {}).get('correct')), None)
     require(next_question and next_question['id'] == question['id'], '请按顺序完成当前单元')
     step = entry['steps'].setdefault(question['id'], {'correct': False, 'attempts': 0, 'hinted': False, 'order': []})
+    if body.get('action') == 'repeat':
+        require(subject in ['english','chinese'] and step.get('choiceCorrect') and step.get('repeatRequired'), '请先选对当前题的答案，再跟读')
+        transcript=body.get('transcript')
+        require(isinstance(transcript,str) and 0<len(transcript.strip())<=1000, '没有识别到有效内容，请再读一次')
+        score=repeat_score(question['speech'],transcript)
+        old=step.get('repeat',{})
+        step['repeat']={'transcript':transcript.strip(),'score':score,'passed':score>=80,'attempts':old.get('attempts',0)+1,'updatedAt':now.isoformat(),'method':'content-match-v1'}
+        step['updatedAt']=now.isoformat()
+        if score>=80:
+            step['correct']=True
+            step['completedAt']=now.isoformat()
+            if complete(entry):entry['completedAt']=now.isoformat()
+        return {'feedback':'repeat-pass' if score>=80 else 'repeat-try','score':score,'autoChecked':day_complete(plan,day)}
     if body.get('action') == 'hint':
         step['hinted'] = True
         step['updatedAt'] = now.isoformat()
         return {'feedback': 'hint', 'autoChecked': False}
     require(body.get('action') == 'answer', '学习操作无效')
+    if step.get('choiceCorrect') and step.get('repeatRequired'):
+        return {'feedback':'repeat','autoChecked':False}
     answer = body.get('answer')
     require(isinstance(answer, str) and answer in question['options'], '请选择画面中的一个答案')
     step['lastAnswer'] = answer
@@ -99,8 +131,12 @@ def apply_event(state, body, now=None):
         correct = answer == question['answer']
         feedback = 'correct' if correct else 'try'
     if correct:
-        step['correct'] = True
-        step['completedAt'] = now.isoformat()
+        if entry.get('repeatRequired') and subject in ['english','chinese']:
+            step.update(choiceCorrect=True,repeatRequired=True)
+            feedback='repeat'
+        else:
+            step['correct'] = True
+            step['completedAt'] = now.isoformat()
     elif feedback == 'try':
         step['attempts'] += 1
         if step['attempts'] >= 2:
@@ -126,12 +162,26 @@ def validate_study(plan):
             lesson = LESSONS.get(entry.get('lessonId'))
             require(lesson and lesson['type'] == subject, '课次不存在')
             steps = entry.get('steps')
+            require(type(entry.get('repeatRequired',False)) is bool,'跟读设置无效')
             qs = {q['id']: q for q in questions(lesson)}
             require(isinstance(steps, dict) and len(steps) <= len(qs), '学习步骤记录无效')
             for qid, step in steps.items():
                 require(qid in qs and isinstance(step, dict), '学习问题不存在')
                 require(type(step.get('correct')) is bool and type(step.get('attempts')) is int and 0 <= step['attempts'] <= 100000 and type(step.get('hinted')) is bool, '学习结果格式无效')
                 q = qs[qid]
+                require(type(step.get('repeatRequired',False)) is bool and type(step.get('choiceCorrect',False)) is bool,'跟读阶段无效')
+                if step.get('choiceCorrect'):
+                    require(subject in ['english','chinese'] and step.get('lastAnswer')==q['answer'],'选择阶段尚未完成')
+                repeat=step.get('repeat')
+                if repeat is not None:
+                    require(isinstance(repeat,dict) and step.get('repeatRequired') and step.get('choiceCorrect'),'跟读记录无效')
+                    require(isinstance(repeat.get('transcript'),str) and 0<len(repeat['transcript'])<=1000,'跟读内容无效')
+                    require(type(repeat.get('score')) is int and repeat['score']==repeat_score(q['speech'],repeat['transcript']),'跟读分数无效')
+                    require(type(repeat.get('passed')) is bool and repeat['passed']==(repeat['score']>=80),'跟读结果无效')
+                    require(type(repeat.get('attempts')) is int and 1<=repeat['attempts']<=100000,'跟读次数无效')
+                    require(isinstance(repeat.get('updatedAt'),str) and len(repeat['updatedAt'])<=60,'跟读时间无效')
+                if step.get('correct') and step.get('repeatRequired'):
+                    require(repeat and repeat.get('passed'),'需要跟读通过才能完成')
                 require(isinstance(step.get('order', []), list) and len(step.get('order', [])) <= len(q['options']), '排序进度无效')
                 if q['kind'] == 'order':
                     require(step.get('order', []) == q['answer'][:len(step.get('order', []))], '排序结果不匹配')

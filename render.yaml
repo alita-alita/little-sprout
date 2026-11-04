@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: little-sprout
+    runtime: python
+    plan: starter
+    buildCommand: python -m compileall -q server.py cloud_server.py learning.py
+    startCommand: python cloud_server.py
+    healthCheckPath: /healthz
+    disk:
+      name: sprout-data
+      mountPath: /var/data/sprout
+      sizeGB: 1
+    envVars:
+      - key: SPROUT_DATA_DIR
+        value: /var/data/sprout
+      - key: FAMILY_USERNAME
+        sync: false
+      - key: FAMILY_PASSWORD
+        sync: false
