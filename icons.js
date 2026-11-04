@@ -1,0 +1,31 @@
+(() => {
+  const paths = {
+    home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+    calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 10h16m-11 5 2 2 4-4"/>',
+    sprout:'<path d="M12 22V12M12 15C4 16 2 11 3 5c6-1 10 3 9 10Zm0-3C12 5 16 2 22 3c1 6-3 10-10 9Z"/>',
+    arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',
+    back:'<path d="M20 12H4m6-6-6 6 6 6"/>',
+    chevron:'<path d="m9 5 7 7-7 7"/>',
+    check:'<path d="m5 12 4 4L19 6"/>',
+    close:'<path d="m6 6 12 12M6 18 18 6"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    speaker:'<path d="m11 4-6 5H2v6h3l6 5zM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>',
+    sun:'<circle cx="12" cy="12" r="4"/><path d="M12 1v2m0 18v2M1 12h2m18 0h2M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/>',
+    profile:'<circle cx="12" cy="12" r="10"/><circle cx="12" cy="9" r="3"/><path d="M5 19c1-6 13-6 14 0"/>',
+    book:'<path d="M12 5v16M12 5C9 2 4 3 2 4v15c4-2 7-1 10 2 3-3 6-4 10-2V4c-2-1-7-2-10 1Z"/>',
+    blocks:'<rect x="3" y="12" width="7" height="8" rx="1"/><rect x="14" y="12" width="7" height="8" rx="1"/><path d="m8 3 5-2 3 7-6 2z"/>',
+    run:'<circle cx="15" cy="4" r="2"/><path d="m7 10 4-3 5 2 4 1m-9-3-2 7 5 2 1 5m-6-7-4 5H2m10-8 4 3 5-1"/>',
+    note:'<rect x="5" y="3" width="15" height="18" rx="2"/><path d="M3 6h4M3 10h4M3 14h4M3 18h4m3-10h6m-6 4h6m-6 4h4"/>',
+    bulb:'<path d="M8 17c0-4-4-4-4-9a8 8 0 0 1 16 0c0 5-4 5-4 9ZM8 20h8m-6 3h4m-2-23v2M1 3l2 2m18-2-2 2"/>',
+    gear:'<path d="m9 3 1-2h4l1 2 3 2 2-1 2 4-2 2v4l2 2-2 4-2-1-3 2-1 2h-4l-1-2-3-2-2 1-2-4 2-2v-4L2 8l2-4 2 1z"/><circle cx="12" cy="12" r="3"/>',
+    heart:'<path d="M20 5c-3-3-7-1-8 2-1-3-5-5-8-2-4 4 0 9 8 15 8-6 12-11 8-15Z"/>',
+    grid:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+    signal:'<path d="M3 20v-4m5 4v-8m5 8V8m5 12V4"/>',
+    wifi:'<path d="M2 8a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0m-11 4a5 5 0 0 1 8 0m-4 4h.01"/>',
+    battery:'<rect x="2" y="6" width="18" height="12" rx="2"/><path d="M23 10v4"/><rect x="5" y="9" width="12" height="6" rx="1" fill="currentColor" stroke="none"/>',
+    flag:'<path d="M5 22V3c5-4 9 4 15 0v10c-6 4-10-4-15 0"/>',
+    lock:'<rect x="5" y="10" width="14" height="12" rx="3"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2"/>',
+    leaf:'<path d="M4 20C1 8 7 2 21 3c1 14-5 20-17 17Zm0 0L16 8"/>',
+  };
+  window.icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.sprout}</svg>`;
+})();
