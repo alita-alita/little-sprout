@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from server import Handler, ThreadingHTTPServer, initialize, connect
+from storage import DB_ERRORS, is_postgres
 
 COOKIE = '__Host-sprout_session'
 SESSION_SECONDS = 14 * 86400
@@ -24,9 +25,13 @@ def prepare_auth(db):
     with connect(db) as c:
         c.execute('CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires INTEGER NOT NULL, credential TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS login_limit (id INTEGER PRIMARY KEY CHECK(id=1), failures INTEGER NOT NULL, reset_at INTEGER NOT NULL)')
-        c.execute('INSERT OR IGNORE INTO login_limit VALUES (1,0,0)')
-        c.execute('CREATE TABLE IF NOT EXISTS auth_config (id INTEGER PRIMARY KEY CHECK(id=1), salt BLOB NOT NULL)')
-        c.execute('INSERT OR IGNORE INTO auth_config VALUES (1,?)', (secrets.token_bytes(32),))
+        c.execute('INSERT INTO login_limit VALUES (1,0,0) ON CONFLICT (id) DO NOTHING')
+        c.execute('CREATE TABLE IF NOT EXISTS auth_config (id INTEGER PRIMARY KEY CHECK(id=1), salt BYTEA NOT NULL)')
+        c.execute('INSERT INTO auth_config VALUES (1,?) ON CONFLICT (id) DO NOTHING', (secrets.token_bytes(32),))
+        if is_postgres(db):
+            for table in ('sessions', 'login_limit', 'auth_config'):
+                c.execute(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY')
+                c.execute(f'REVOKE ALL ON TABLE {table} FROM PUBLIC')
 
 
 class CloudHandler(Handler):
@@ -63,7 +68,7 @@ class CloudHandler(Handler):
                                 (digest(value), int(time.time()), self.server.credential)).fetchone()
             if row:
                 self._session = (digest(value), row[0])
-        except (ValueError, CookieError, sqlite3.Error):
+        except (ValueError, CookieError):
             pass
         return self._session
 
@@ -76,7 +81,12 @@ class CloudHandler(Handler):
         if not self.allowed():
             self.json_response(403, {'error': '请使用正式应用地址'})
             return False
-        if not self.session():
+        try:
+            session = self.session()
+        except DB_ERRORS:
+            self.json_response(503, {'error': '数据库暂时未连接，请稍后重试；已保存记录仍保留'})
+            return False
+        if not session:
             self.json_response(401, {'error': '请先登录家庭账号', 'loginRequired': True})
             return False
         return True
@@ -88,11 +98,14 @@ class CloudHandler(Handler):
                 with connect(self.server.db) as c:
                     c.execute('SELECT revision FROM state WHERE id=1').fetchone()
                 return self.json_response(200, {'ok': True})
-            except sqlite3.Error:
+            except DB_ERRORS:
                 return self.json_response(503, {'ok': False})
         if path.startswith('/api/') and not self.authenticated():
             return
-        super().do_GET()
+        try:
+            super().do_GET()
+        except DB_ERRORS:
+            return self.json_response(503, {'error': '暂时无法读取记录，请稍后重试'})
 
     def do_PUT(self):
         if self.authenticated():
@@ -102,14 +115,20 @@ class CloudHandler(Handler):
 
     def do_POST(self):
         if self.path == '/api/login':
-            return self.login()
+            try:
+                return self.login()
+            except DB_ERRORS:
+                return self.json_response(503, {'error': '暂时无法连接家庭记录，请稍后重试登录'})
         if not self.authenticated():
             return
         if self.path == '/api/logout':
             if self.headers.get('Origin') != self.server.origin or self.headers.get('X-Sprout-Token') != self.request_token:
                 return self.json_response(403, {'error': '请刷新页面后重试'})
-            with connect(self.server.db) as c:
-                c.execute('DELETE FROM sessions WHERE id=?', (self.session()[0],))
+            try:
+                with connect(self.server.db) as c:
+                    c.execute('DELETE FROM sessions WHERE id=?', (self.session()[0],))
+            except DB_ERRORS:
+                return self.json_response(503, {'error': '退出尚未确认，请恢复连接后重试'})
             return self.auth_response({'ok': True}, '', 0)
         # An authenticated cloud mutation always requires a browser Origin.
         if self.headers.get('Origin') != self.server.origin:
@@ -162,14 +181,15 @@ class CloudHandler(Handler):
         self.wfile.write(raw)
 
 
-def configure(server, origin, username, password):
+def configure(server, origin, username, password, initialize_auth=True):
     parsed = urlsplit(origin)
     if parsed.scheme != 'https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:
         raise ValueError('PUBLIC_ORIGIN 必须是 HTTPS 站点根地址，不带路径或尾部斜线')
     if not username or len(username) > 80 or len(password) < 12 or len(password) > 256:
         raise ValueError('请配置 FAMILY_USERNAME 和至少12位的 FAMILY_PASSWORD')
     server.cloud, server.origin, server.username = True, origin, username
-    prepare_auth(server.db)
+    if initialize_auth:
+        prepare_auth(server.db)
     with connect(server.db) as c:
         server.password_salt = c.execute('SELECT salt FROM auth_config WHERE id=1').fetchone()[0]
     server.password_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), server.password_salt, 600000)
@@ -179,11 +199,18 @@ def configure(server, origin, username, password):
 
 def serve():
     os.umask(0o077)
+    database_url = os.environ.get('DATABASE_URL', '')
     root = Path(os.environ.get('SPROUT_DATA_DIR', '/var/data/sprout'))
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    db = root / 'sprout.sqlite3'
+    if database_url:
+        if not is_postgres(database_url):
+            raise ValueError('DATABASE_URL 必须是 PostgreSQL 连接地址')
+        db = database_url
+    else:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        db = str(root / 'sprout.sqlite3')
     initialize(str(db))
-    os.chmod(db, 0o600)
+    if not database_url:
+        os.chmod(db, 0o600)
     origin = os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL', '')
     server = ThreadingHTTPServer(('0.0.0.0', int(os.environ.get('PORT', '10000'))), CloudHandler)
     server.db = str(db)

@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import sqlite3
+from unittest.mock import patch
 
 import cloud_server as cloud
 from server import initialize, connect
@@ -27,9 +29,10 @@ class CloudTests(unittest.TestCase):
         self.thread.join()
         self.temp.cleanup()
 
-    def call(self, path='/api/state', method='GET', body=None, cookie='', csrf='', origin=True, host='family.example'):
+    def call(self, path='/api/state', method='GET', body=None, cookie='', csrf='', origin=True, host='family.example', extra_headers=None):
         c = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
         headers = {'Host': host, 'Content-Type': 'application/json', 'Cookie': cookie, 'X-Sprout-Token': csrf}
+        headers.update(extra_headers or {})
         if origin:
             headers['Origin'] = self.origin if origin is True else origin
         c.request(method, path, json.dumps(body) if body is not None else None, headers)
@@ -106,6 +109,13 @@ class CloudTests(unittest.TestCase):
         for origin, password in [('http://family.example', 'test-only-password-123'), (self.origin, 'short')]:
             with self.assertRaises(ValueError):
                 cloud.configure(self.server, origin, 'family', password)
+
+    def test_database_outage_is_retryable_without_expiring_the_device_session(self):
+        cookie=self.login()
+        with patch('cloud_server.connect',side_effect=sqlite3.OperationalError('temporary outage')):
+            self.assertEqual(self.call(cookie=cookie)[0],503)
+            self.assertEqual(self.call('/api/login','POST',{'username':'family','password':'test-only-password-123'})[0],503)
+        self.assertEqual(self.call(cookie=cookie)[0],200)
 
 
 if __name__ == '__main__':

@@ -87,3 +87,28 @@ test('all Chinese lessons show character choices while preserving stored answer 
     assert.equal(JSON.stringify(lesson),original);
   }
 });
+
+test('cloud replay waits for server confirmation, retains retry IDs, and resumes on a fresh device',async()=>{
+  const t=setup(),{U}=t;let confirmed=null,fail=true;const calls=[];
+  U.configure({plan:()=>t.plan,render(){},event(){throw Error('Formal learning must not be modified');},practice:()=>confirmed,practiceEvent:async payload=>{
+    calls.push(JSON.parse(JSON.stringify(payload)));
+    if(fail)return null;
+    if(payload.action==='start')confirmed={lessonId:t.lesson.id,steps:{},roundId:payload.eventId,roundNumber:1,repeatRequired:true};
+    else if(payload.action==='answer')confirmed.steps.w0={correct:false,choiceCorrect:true,repeatRequired:true,attempts:0,hinted:false,order:[]};
+    else if(payload.action==='repeat')confirmed.steps.w0={...confirmed.steps.w0,correct:true,repeat:{score:100,passed:true,transcript:payload.transcript,attempts:1}};
+    return {feedback:payload.action==='repeat'?'repeat-pass':'repeat'};
+  }});
+  await U.beginPractice();assert.equal(U.practice,null);assert.ok(U.pending);assert.match(U.error,/未确认/);
+  fail=false;await U.beginPractice();assert.equal(calls[0].eventId,calls[1].eventId);assert.equal(U.practice,confirmed);
+  const q=t.lesson.units[0].questions[0];await U.submit('answer',q.answer);assert.equal(U.practice.steps.w0.correct,false);assert.equal(calls.at(-1).roundId,confirmed.roundId);
+  await U.saveRepeat(q.speech);assert.equal(U.practice.steps.w0.correct,true);assert.equal(JSON.stringify(t.plan),t.original);
+  U.select('english',1);assert.equal(U.practice.steps.w0.correct,true);assert.match(U.render(),/继续复习/);
+});
+
+test('another device can create or advance a replay round without being overwritten by browser storage',async()=>{
+  const t=setup(),{U}=t;let current=null;
+  U.configure({plan:()=>t.plan,render(){},practiceEvent:async()=>null,practice:()=>current});
+  U.select('english',1);assert.equal(U.practice,null);
+  current={lessonId:t.lesson.id,steps:{},roundId:'other-device'};U.syncPractice();assert.equal(U.practice.roundId,'other-device');
+  U.qid='w0';current={lessonId:t.lesson.id,steps:{},roundId:'new-round'};U.syncPractice();assert.equal(U.qid,null);assert.equal(U.screen,'map');assert.equal(U.practice.roundId,'new-round');
+});

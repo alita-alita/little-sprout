@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+export PORT="${PORT:-9000}"
+export PYTHONPATH="./third_party${PYTHONPATH:+:$PYTHONPATH}"
+exec /var/lang/python311/bin/python3.11 cloudbase_server.py

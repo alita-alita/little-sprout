@@ -4,3 +4,8 @@ __pycache__/
 .env
 .env.*
 !.env.example
+third_party/
+dist/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

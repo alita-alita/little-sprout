@@ -83,13 +83,18 @@ def apply_event(state, body, now=None):
         entry['repeatRequired']=True
     if body.get('action') == 'open':
         return {'feedback': 'opened', 'autoChecked': day_complete(plan, day)}
+    result = grade_entry(entry, body, subject, now)
+    result['autoChecked'] = day_complete(plan, day)
+    return result
+
+def grade_entry(entry, body, subject, now):
     lesson = LESSONS[entry['lessonId']]
     all_questions = questions(lesson)
     question = next((q for q in all_questions if q['id'] == body.get('questionId')), None)
     require(question is not None, '学习单元不存在')
     step = entry['steps'].get(question['id'], {})
     if step.get('correct'):
-        return {'feedback': 'already', 'autoChecked': day_complete(plan, day)}
+        return {'feedback': 'already', 'autoChecked': False}
     next_question = next((q for q in all_questions if not entry['steps'].get(q['id'], {}).get('correct')), None)
     require(next_question and next_question['id'] == question['id'], '请按顺序完成当前单元')
     step = entry['steps'].setdefault(question['id'], {'correct': False, 'attempts': 0, 'hinted': False, 'order': []})
@@ -105,7 +110,7 @@ def apply_event(state, body, now=None):
             step['correct']=True
             step['completedAt']=now.isoformat()
             if complete(entry):entry['completedAt']=now.isoformat()
-        return {'feedback':'repeat-pass' if score>=80 else 'repeat-try','score':score,'autoChecked':day_complete(plan,day)}
+        return {'feedback':'repeat-pass' if score>=80 else 'repeat-try','score':score,'autoChecked':False}
     if body.get('action') == 'hint':
         step['hinted'] = True
         step['updatedAt'] = now.isoformat()
@@ -143,7 +148,7 @@ def apply_event(state, body, now=None):
             step['hinted'] = True
     if complete(entry):
         entry['completedAt'] = now.isoformat()
-    return {'feedback': feedback, 'autoChecked': day_complete(plan, day)}
+    return {'feedback': feedback, 'autoChecked': False}
 
 def validate_study(plan):
     settings = plan.get('study')

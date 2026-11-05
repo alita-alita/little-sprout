@@ -11,6 +11,9 @@ import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from learning import apply_event, validate_study
+from practice import apply_practice_event, validate_practice
+from storage import connect, DB_ERRORS, is_postgres
+from cloudbase_http import CloudBaseConflict
 
 ROOT = Path(__file__).resolve().parent
 KINDS = {'english', 'math', 'chinese', 'sport'}
@@ -74,23 +77,26 @@ def validate(state):
                     require(value.get('reaction', '') in ['', '很喜欢', '一般', '有点难'], '反馈无效')
                     require(text(value.get('time', ''), 60), '记录时间无效')
         validate_study(p)
+        validate_practice(p)
     require(state.get('selectedPlanId') is None or state['selectedPlanId'] in ids, '所选计划不存在')
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
     active = [p for p in plans if p['status'] == 'active' and dt.date.fromisoformat(p['start']) + dt.timedelta(days=p['duration']) > today]
     require(len(active) <= 1, '只能有一个待开始或进行中的计划')
     return state
 
-def connect(db):
-    connection = sqlite3.connect(db, timeout=10)
-    connection.execute('PRAGMA journal_mode=WAL')
-    return connection
-
 def initialize(db):
     with connect(db) as connection:
+        if is_postgres(db):
+            connection.execute('CREATE SCHEMA IF NOT EXISTS sprout')
+            connection.execute('REVOKE ALL ON SCHEMA sprout FROM PUBLIC')
         connection.execute('CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, payload TEXT NOT NULL, updated TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS revisions (revision INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS learning_events (id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT NOT NULL)')
-        connection.execute('INSERT OR IGNORE INTO state VALUES (1,0,?,?)', (json.dumps(EMPTY), dt.datetime.now(dt.timezone.utc).isoformat()))
+        connection.execute('INSERT INTO state VALUES (1,0,?,?) ON CONFLICT (id) DO NOTHING', (json.dumps(EMPTY), dt.datetime.now(dt.timezone.utc).isoformat()))
+        if is_postgres(db):
+            for table in ('state', 'revisions', 'learning_events'):
+                connection.execute(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY')
+                connection.execute(f'REVOKE ALL ON TABLE {table} FROM PUBLIC')
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -130,10 +136,15 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == '/api/state':
             with connect(self.server.db) as connection:
+                known = self.headers.get('X-Sprout-Revision')
+                if known is not None:
+                    current = connection.execute('SELECT revision FROM state WHERE id=1').fetchone()[0]
+                    if str(current) == known:
+                        return self.json_response(200, {'unchanged': True, 'revision': current})
                 revision, payload, updated = connection.execute('SELECT revision,payload,updated FROM state WHERE id=1').fetchone()
             return self.json_response(200, {'revision': revision, 'state': json.loads(payload), 'updated': updated, 'token': self.request_token, 'cloud': bool(getattr(self.server, 'cloud', False))})
         # Explicit static allowlist prevents serving the database or Python source.
-        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/repeat.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
+        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/repeat.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/sync-model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
             return self.json_response(404, {'error': '页面不存在'})
         if path == '/favicon.ico':
             self.send_response(204)
@@ -171,27 +182,33 @@ class Handler(SimpleHTTPRequestHandler):
                             before = old.get('records', {}).get(day, {}).get('study', {})
                             after = plan['records'].get(day, {}).get('study', {})
                             require(before == after, '学习进度须通过互动完成；恢复备份请使用恢复入口')
-                connection.execute('INSERT OR REPLACE INTO revisions VALUES (?,?,?)', (revision, old_payload, old_updated))
+                            require(old.get('records', {}).get(day, {}).get('practice', {}) == plan['records'].get(day, {}).get('practice', {}), '复习进度须通过复习入口保存')
+                connection.execute('INSERT INTO revisions VALUES (?,?,?) ON CONFLICT (revision) DO UPDATE SET payload=excluded.payload,updated=excluded.updated', (revision, old_payload, old_updated))
                 connection.execute('DELETE FROM revisions WHERE revision < ?', (revision - 29,))
                 connection.execute('UPDATE state SET revision=?,payload=?,updated=? WHERE id=1', (revision + 1, payload, updated))
             return self.json_response(200, {'revision': revision + 1, 'updated': updated})
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             return self.json_response(400, {'error': str(exc) if isinstance(exc, ValueError) else '数据格式不正确'})
-        except sqlite3.Error:
+        except CloudBaseConflict:
+            return self.json_response(409, {'error': '另一页面已更新记录，请重新加载后再试'})
+        except DB_ERRORS:
             return self.json_response(503, {'error': '数据库暂时无法保存，请稍后重试；当前输入仍保留'})
 
     def do_POST(self):
         expected_origin = self.expected_origin()
         if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.request_token:
             return self.json_response(403, {'error': '请重新打开本机应用后继续学习'})
-        if self.path != '/api/study-event':
+        if self.path not in ['/api/study-event', '/api/practice-event']:
             return self.json_response(404, {'error': '接口不存在'})
         try:
             length = int(self.headers.get('Content-Length', 0))
             require(0 < length <= 16384, '学习请求无效')
             body = json.loads(self.rfile.read(length))
             require(type(body.get('revision')) is int and text(body.get('eventId'), 80) and body['eventId'], '学习请求标识无效')
-            event_request = json.dumps({k: v for k, v in body.items() if k != 'revision'}, sort_keys=True)
+            event_data = {k: v for k, v in body.items() if k != 'revision'}
+            if self.path == '/api/practice-event':
+                event_data['endpoint'] = 'practice'
+            event_request = json.dumps(event_data, sort_keys=True)
             with connect(self.server.db) as connection:
                 connection.execute('BEGIN IMMEDIATE')
                 revision, payload, old_updated = connection.execute('SELECT revision,payload,updated FROM state WHERE id=1').fetchone()
@@ -202,17 +219,27 @@ class Handler(SimpleHTTPRequestHandler):
                 if revision != body['revision']:
                     return self.json_response(409, {'error': '另一页面更新了记录，请读取最新进度后继续'})
                 state = json.loads(payload)
-                result = apply_event(state, body)
+                result = apply_practice_event(state, body) if self.path == '/api/practice-event' else apply_event(state, body)
                 validate(state)
                 updated = dt.datetime.now(dt.timezone.utc).isoformat()
-                connection.execute('INSERT OR REPLACE INTO revisions VALUES (?,?,?)', (revision, payload, old_updated))
+                connection.execute('INSERT INTO revisions VALUES (?,?,?) ON CONFLICT (revision) DO UPDATE SET payload=excluded.payload,updated=excluded.updated', (revision, payload, old_updated))
                 connection.execute('DELETE FROM revisions WHERE revision < ?', (revision - 29,))
                 connection.execute('UPDATE state SET revision=?,payload=?,updated=? WHERE id=1', (revision+1, json.dumps(state, ensure_ascii=False), updated))
                 connection.execute('INSERT INTO learning_events VALUES (?,?,?)', (body['eventId'], event_request, json.dumps(result)))
-            return self.json_response(200, {'revision': revision+1, 'state': state, 'updated': updated, 'result': result})
+            response = {'revision': revision+1, 'updated': updated, 'result': result}
+            if self.headers.get('X-Sprout-Delta') == '1':
+                plan = next(p for p in state['plans'] if p['id'] == body['planId'])
+                response['patch'] = {'planId': plan['id'], 'day': body['day'],
+                                     'record': plan['records'][str(body['day'])],
+                                     'selectedPlanId': state['selectedPlanId']}
+            else:
+                response['state'] = state
+            return self.json_response(200, response)
         except (ValueError, TypeError, KeyError, AttributeError, IndexError) as error:
             return self.json_response(400, {'error': str(error) if isinstance(error, ValueError) else '学习数据格式不正确'})
-        except sqlite3.Error:
+        except CloudBaseConflict:
+            return self.json_response(409, {'error': '另一页面更新了记录，请读取最新进度后继续'})
+        except DB_ERRORS:
             return self.json_response(503, {'error': '暂时没能保存，先别退出，恢复连接后可以重试'})
 
 def serve(port=4318, db=None):
