@@ -3,3 +3,30 @@
 @media(max-width:1200px){.workspace{padding:27px}.family-aside{display:none}.phone{max-width:720px}.preview-layout{gap:0}.studio-header h1{font-size:21px}}
 @media(max-width:700px){.studio,.workspace,.preview-layout{display:block;width:100%;margin:0;padding:0}.sidebar,.studio-header,.family-aside,.studio-footer{display:none}.phone{max-width:none;width:100%;height:100dvh;min-height:0;border-radius:0;border:0;box-shadow:none}.app-content{height:100%;scrollbar-width:none}.screen{padding:24px 21px 110px;min-height:100%}.screen h2{font-size:25px}.subtitle{font-size:13px}.app-brand{font-size:18px}.app-header{margin-bottom:24px}.child-pill{font-size:12px;padding:5px 10px}.garden-card{height:210px}.garden-content{padding:26px 17px;width:68%;max-width:68%}.garden-content h3{font-size:25px}.garden-content .progress-track{width:140px}.task-card{padding:15px 12px;gap:11px}.task-copy strong{font-size:16px}.task-copy small{font-size:12px}.task-art{width:42px}.task-arrow{width:31px;height:31px}.task-topbar{font-size:17px}.task-screen h2{font-size:25px}.task-hero{height:190px}.task-screen{padding-top:8px}.task-action{margin-top:-91px;padding:12px 18px calc(20px + env(safe-area-inset-bottom))}.step p{font-size:13px}.step-number{width:25px;height:25px}.steps{padding:17px 13px}.materials p{font-size:12px}.task-meta{font-size:12px;gap:20px}.plan-panel{padding:17px 15px}.panel-heading h3{font-size:16px}.day-cell{width:36px;height:36px;font-size:13px}.day-cell.partial span{width:23px;height:23px}.day-grid{gap:11px 3px}.calendar-panel{padding:20px 10px}.detail-task .task-copy strong{font-size:12px}.detail-task .task-copy small{font-size:11px}.small-cta{font-size:11px;padding:7px}.day-detail{padding:17px 12px}.day-detail h3{font-size:16px}.calendar-date-caption{font-size:10px}.bottom-nav{height:calc(82px + env(safe-area-inset-bottom));margin-top:calc(-82px - env(safe-area-inset-bottom));padding-bottom:calc(15px + env(safe-area-inset-bottom))}.bottom-nav button{font-size:11px;width:auto;max-width:66px}.bottom-nav .icon{width:22px;height:22px}.subject-row{font-size:12px;gap:7px}.subject-row b{font-size:11px;width:37px}.growth-art{height:180px}.growth-summary h3{font-size:17px}.growth-metrics span{font-size:12px}.subject-caption{font-size:10px}.subject-tabs{gap:7px}.subject-tabs button{font-size:12px}.profile-card{padding:16px;gap:12px}.profile-avatar{font-size:35px}.history-card{gap:8px}.history-card strong{font-size:14px}.sheet{width:100%;border-radius:25px 25px 0 0;padding:25px 23px calc(25px + env(safe-area-inset-bottom))}.modal-backdrop{padding:0;align-items:flex-end}.avatar-options span{width:60px;height:60px}.form-screen form>.primary-btn{margin-top:23px}}
 @media(max-width:365px){.screen{padding-left:16px;padding-right:16px}.task-copy strong{font-size:15px}.task-art{width:35px}.task-card{gap:9px}.day-cell{width:31px;height:31px}.day-cell.partial span{width:19px;height:19px;font-size:11px}.small-cta{padding:5px;font-size:10px}.detail-task .task-copy strong{font-size:11px}.avatar-options{gap:9px}.avatar-options span{width:56px;height:56px}.profile-card{gap:9px}.history-card small{font-size:10px}.calendar-legend{gap:10px;font-size:10px}}
+
+/* Form controls and fieldsets must shrink inside narrow mobile viewports. */
+.form-screen form,.form-screen fieldset{min-width:0;min-inline-size:0;max-width:100%;width:100%;box-sizing:border-box}
+.form-screen .text-input,.form-screen select,.sheet input,.sheet textarea{min-width:0;max-width:100%;box-sizing:border-box}
+@media(max-width:700px){
+ html,body{width:100%;min-width:0}
+ .studio,.workspace,.preview-layout,.phone,.app-content,.screen{min-width:0;max-width:100%;box-sizing:border-box}
+ .phone{height:100vh;height:100dvh}
+ .app-content{overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
+ .screen{width:100%;padding-left:max(20px,env(safe-area-inset-left));padding-right:max(20px,env(safe-area-inset-right));padding-bottom:calc(110px + env(safe-area-inset-bottom))}
+ .form-screen{padding-top:calc(22px + env(safe-area-inset-top));padding-bottom:calc(32px + env(safe-area-inset-bottom))}
+ .form-screen:has(+.bottom-nav){padding-bottom:calc(110px + env(safe-area-inset-bottom))}
+ .form-screen input,.form-screen select,.form-screen textarea,.sheet input,.sheet textarea{font-size:16px}
+ .avatar-options{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+ .avatar-options legend{margin-bottom:14px}
+ .avatar-options label{min-width:0;display:flex;justify-content:center}
+ .avatar-options span{width:100%;max-width:64px;height:auto;aspect-ratio:1;display:grid;place-items:center}
+ .interest-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .interest-options legend{margin-bottom:14px;max-width:100%;white-space:normal}
+ .interest-options label{min-width:0;min-height:48px;margin:0;justify-content:flex-start;white-space:normal;padding:12px}
+ .interest-options input{flex-shrink:0}
+ .form-screen .primary-btn,.form-screen .secondary-btn{width:100%;max-width:100%;min-width:0;min-height:50px;white-space:normal;line-height:1.5;padding:12px 16px;overflow-wrap:anywhere}
+ .form-screen .primary-btn .icon{flex-shrink:0}
+ .muted-info,.plan-preview,.form-error{overflow-wrap:anywhere;max-width:100%}
+ .sheet{min-width:0;max-width:100%;overflow-x:hidden}
+}
+@media(max-width:365px){.screen{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}.avatar-options{gap:8px}}

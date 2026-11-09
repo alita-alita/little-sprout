@@ -30,9 +30,8 @@ def request_bridge(body):
     if not re.fullmatch(r'[a-zA-Z0-9-]{1,100}', env) or not key:
         raise CloudBaseError('请配置服务端 CloudBase 环境 ID 和 API Key')
     request = urllib.request.Request(
-        f'https://{env}.api.tcloudbasegateway.com/v1/rdb/exec-pgsql',
-        data=json.dumps({'sql': 'SELECT sprout.http_bridge($1::jsonb) AS result',
-                         'parameters': [json.dumps(body, ensure_ascii=False)]}).encode(),
+        f'https://{env}.api.tcloudbasegateway.com/v1/rdb/rest/rpc/sprout_server_bridge',
+        data=json.dumps({'request': body}, ensure_ascii=False).encode(),
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
         method='POST')
     try:
@@ -41,7 +40,7 @@ def request_bridge(body):
             if len(raw) > 24 * 1024 * 1024:
                 raise ValueError()
             data = json.loads(raw)
-        result = data[0]['result']
+        result = data
         if not isinstance(result, dict):
             raise TypeError()
         return result
@@ -49,16 +48,16 @@ def request_bridge(body):
         code = ''
         try:
             candidate = json.loads(error.read(65536)).get('code', '')
-            if isinstance(candidate, str) and re.fullmatch(r'(DATABASE_[0-9]{5}|UNAUTHORIZED|ACTION_FORBIDDEN|INVALID_PARAM|INTERNAL_ERROR)', candidate):
+            if isinstance(candidate, str) and re.fullmatch(r'(DATABASE_[0-9]{5}|[0-9]{5}|PGRST[0-9]{3}|UNAUTHORIZED|ACTION_FORBIDDEN|INVALID_PARAM|INTERNAL_ERROR)', candidate):
                 code = candidate
         except (ValueError, TypeError, AttributeError, OSError):
             pass
-        raise CloudBaseError(f'CloudBase SQL 接口 HTTP {error.code} {code}；请核对环境 ID、服务端 API Key 及数据库连接函数权限') from None
+        raise CloudBaseError(f'CloudBase RPC 接口 HTTP {error.code} {code}；请核对服务端 API Key 及 cloudbase_rpc_bridge.sql 初始化状态') from None
     except (URLError, TimeoutError, OSError):
         raise CloudBaseError('CloudBase HTTPS 网络连接失败或超时；请核对函数公网访问开关') from None
     except (ValueError, TypeError, KeyError, IndexError):
         # No SQL, child data, credentials or provider response in errors/logs.
-        raise CloudBaseError('CloudBase SQL 接口返回格式不符合预期') from None
+        raise CloudBaseError('CloudBase RPC 接口返回格式不符合预期') from None
 
 
 class Cursor:

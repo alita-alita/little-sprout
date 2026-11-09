@@ -57,8 +57,19 @@ def ensure_entry(state, plan, day, subject):
                     previous.append((date, pi, int(di), entry))
     previous.sort(key=lambda value: value[:3])
     last = previous[-1][3] if previous else None
-    index = min(90, int(last['lessonId'].split('-')[-1]) + (1 if complete(last) else 0)) if last else 1
-    entry = {'lessonId': f'{subject}-{index}', 'steps': {}, 'repeatRequired': subject in ['english','chinese']}
+    if last and not complete(last):
+        lesson_id = last['lessonId']
+    else:
+        used = {r.get('study', {}).get(subject, {}).get('lessonId')
+                for di, r in plan['records'].items() if int(di) <= day}
+        queued = next((ident for ident in plan.get('courseQueue', [])
+                       if subject == 'english' and ident not in used and ident in LESSONS), None)
+        builtin = next((item[3] for item in reversed(previous)
+                        if not LESSONS[item[3]['lessonId']].get('courseId')), None)
+        index = min(90, LESSONS[builtin['lessonId']]['index'] + 1) if builtin else 1
+        base = f'{subject}-{index}'
+        lesson_id = queued or CATALOG.get('published', {}).get(base, base)
+    entry = {'lessonId': lesson_id, 'steps': {}, 'repeatRequired': subject in ['english','chinese']}
     if last and not complete(last):
         entry['steps'] = copy.deepcopy(last['steps'])
         entry['continued'] = True
@@ -68,6 +79,18 @@ def ensure_entry(state, plan, day, subject):
 def apply_event(state, body, now=None):
     now = now or dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     today = now.date()
+    if body.get('assignmentId'):
+        item = next((item for item in state.get('courseAssignments', [])
+                     if item['id'] == body['assignmentId']), None)
+        require(item and item['date'] <= today.isoformat(), '这次课程安排还不能开始')
+        entry = item['entry']
+        subject = LESSONS[entry['lessonId']]['type']
+        require(body.get('subject') == subject, '课程学科不匹配')
+        if body.get('action') == 'open':
+            item.setdefault('startedAt', now.isoformat())
+            return {'feedback': 'opened', 'autoChecked': False}
+        require(item.get('startedAt'), '请先打开课程')
+        return grade_entry(entry, body, subject, now)
     plan = next((p for p in state['plans'] if p['id'] == body.get('planId')), None)
     require(plan is not None, '计划不存在')
     day = body.get('day')
@@ -101,20 +124,37 @@ def grade_entry(entry, body, subject, now):
     if body.get('action') == 'repeat':
         require(subject in ['english','chinese'] and step.get('choiceCorrect') and step.get('repeatRequired'), '请先选对当前题的答案，再跟读')
         transcript=body.get('transcript')
-        require(isinstance(transcript,str) and 0<len(transcript.strip())<=1000, '没有识别到有效内容，请再读一次')
-        score=repeat_score(question['speech'],transcript)
+        method=body.get('method', 'content-match-v1')
+        require(method in ['content-match-v1', 'parent-score-v1', 'parent-confirm-v1'], '跟读方式无效')
+        manual=method != 'content-match-v1'
+        if manual:
+            transcript=''
+            score=body.get('score') if method == 'parent-score-v1' else None
+            require(method != 'parent-score-v1' or type(score) is int and 0<=score<=100, '手动分数须为0至100的整数')
+        else:
+            require(isinstance(transcript,str) and 0<len(transcript.strip())<=1000, '没有识别到有效内容，请再读一次')
+            score=repeat_score(question['speech'],transcript)
+        passed=manual or score>=80
         old=step.get('repeat',{})
-        step['repeat']={'transcript':transcript.strip(),'score':score,'passed':score>=80,'attempts':old.get('attempts',0)+1,'updatedAt':now.isoformat(),'method':'content-match-v1'}
+        step['repeat']={'transcript':transcript.strip(),'score':score,'passed':passed,'attempts':old.get('attempts',0)+1,'updatedAt':now.isoformat(),'method':method}
         step['updatedAt']=now.isoformat()
-        if score>=80:
+        if passed:
             step['correct']=True
             step['completedAt']=now.isoformat()
             if complete(entry):entry['completedAt']=now.isoformat()
-        return {'feedback':'repeat-pass' if score>=80 else 'repeat-try','score':score,'autoChecked':False}
+        return {'feedback':'repeat-pass' if passed else 'repeat-try','score':score,'autoChecked':False}
     if body.get('action') == 'hint':
         step['hinted'] = True
         step['updatedAt'] = now.isoformat()
         return {'feedback': 'hint', 'autoChecked': False}
+    if question.get('editableOrder') and body.get('action') in ('undo-order', 'reset-order'):
+        if body['action'] == 'undo-order':
+            if step['order']:
+                step['order'].pop()
+        else:
+            step['order'].clear()
+        step['updatedAt'] = now.isoformat()
+        return {'feedback': 'piece' if step['order'] else '', 'autoChecked': False}
     require(body.get('action') == 'answer', '学习操作无效')
     if step.get('choiceCorrect') and step.get('repeatRequired'):
         return {'feedback':'repeat','autoChecked':False}
@@ -129,7 +169,8 @@ def grade_entry(entry, body, subject, now):
             correct = len(step['order']) == len(question['answer'])
             feedback = 'correct' if correct else 'piece'
         else:
-            step['order'] = []
+            if not question.get('editableOrder'):
+                step['order'] = []
             correct = False
             feedback = 'try'
     else:
@@ -151,6 +192,11 @@ def grade_entry(entry, body, subject, now):
     return {'feedback': feedback, 'autoChecked': False}
 
 def validate_study(plan):
+    queue = plan.get('courseQueue', [])
+    require(isinstance(queue, list) and len(queue) <= 90 and all(
+        isinstance(ident, str) and LESSONS.get(ident, {}).get('courseId') for ident in queue
+    ) and len(set(queue)) == len(queue), '课程安排无效或缺少已发布课程')
+    require(not queue or 'english' in (plan.get('study') or {}).get('subjects', []), '课程安排需要自主英语学习')
     settings = plan.get('study')
     if settings is not None:
         require(isinstance(settings, dict) and settings.get('version') == 1, '自主学习内容版本不支持')
@@ -180,9 +226,15 @@ def validate_study(plan):
                 repeat=step.get('repeat')
                 if repeat is not None:
                     require(isinstance(repeat,dict) and step.get('repeatRequired') and step.get('choiceCorrect'),'跟读记录无效')
-                    require(isinstance(repeat.get('transcript'),str) and 0<len(repeat['transcript'])<=1000,'跟读内容无效')
-                    require(type(repeat.get('score')) is int and repeat['score']==repeat_score(q['speech'],repeat['transcript']),'跟读分数无效')
-                    require(type(repeat.get('passed')) is bool and repeat['passed']==(repeat['score']>=80),'跟读结果无效')
+                    method=repeat.get('method','content-match-v1')
+                    require(method in ['content-match-v1','parent-score-v1','parent-confirm-v1'],'跟读方式无效')
+                    if method=='content-match-v1':
+                        require(isinstance(repeat.get('transcript'),str) and 0<len(repeat['transcript'])<=1000,'跟读内容无效')
+                        require(type(repeat.get('score')) is int and repeat['score']==repeat_score(q['speech'],repeat['transcript']),'跟读分数无效')
+                    else:
+                        require(repeat.get('transcript')=='','手动记录不能伪造识别文字')
+                        require((method=='parent-confirm-v1' and repeat.get('score') is None) or (method=='parent-score-v1' and type(repeat.get('score')) is int and 0<=repeat['score']<=100),'手动分数无效')
+                    require(type(repeat.get('passed')) is bool and repeat['passed']==(method!='content-match-v1' or repeat['score']>=80),'跟读结果无效')
                     require(type(repeat.get('attempts')) is int and 1<=repeat['attempts']<=100000,'跟读次数无效')
                     require(isinstance(repeat.get('updatedAt'),str) and len(repeat['updatedAt'])<=60,'跟读时间无效')
                 if step.get('correct') and step.get('repeatRequired'):

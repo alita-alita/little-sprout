@@ -112,3 +112,56 @@ test('another device can create or advance a replay round without being overwrit
   current={lessonId:t.lesson.id,steps:{},roundId:'other-device'};U.syncPractice();assert.equal(U.practice.roundId,'other-device');
   U.qid='w0';current={lessonId:t.lesson.id,steps:{},roundId:'new-round'};U.syncPractice();assert.equal(U.qid,null);assert.equal(U.screen,'map');assert.equal(U.practice.roundId,'new-round');
 });
+test('generated picture uses its bound word before feedback and remains replayable',async()=>{
+  const t=setup(),{U,ctx}=t;vm.runInContext(fs.readFileSync(path.join(__dirname,'../image-options.js'),'utf8'),ctx);
+  // Clone the catalogue to keep this fixture out of the shared content used by other tests.
+  ctx.StudyModel.catalog=JSON.parse(JSON.stringify(ctx.StudyModel.catalog));const l=ctx.StudyModel.lesson({lessonId:'english-1'}),q=l.units[0].questions[0];
+  const id='pic_'+'a'.repeat(24);l.images={[id]:{word:'pineapple',lang:'en-US',src:'/assets/pictures/'+'a'.repeat(24)+'.png'}};q.options[0]=id;q.answer=id;q.display=q.speech='pineapple';l.units[0].label='pineapple';
+  U.beginPractice();assert.match(U.render(),/class="option-picture"/);assert.equal(U.choiceWord(id),'pineapple');await U.submit('answer',id);assert.equal(t.spoken.at(-1)[0].text,'pineapple');assert.equal(t.spoken.at(-1)[0].lang,'en-US');assert.equal(U.practice.steps[q.id].choiceCorrect,true);assert.equal(U.practice.steps[q.id].correct,false);
+  const before=JSON.stringify(U.practice);await U.handle({dataset:{studyAction:'pronounce',answer:id}});assert.equal(t.spoken.at(-1)[0].text,'pineapple');assert.equal(JSON.stringify(U.practice),before);
+});
+
+test('manual completion and parent scores work without microphone and remain separate from automatic scores',async()=>{
+  for(const type of ['english','chinese']){
+    const {U,lesson}=setup(type);U.beginPractice();const q=lesson.units[0].questions[0];await U.submit('answer',q.answer);
+    assert.match(U.render(),/已读过，手动完成/);assert.match(U.render(),/保存评分并完成/);
+    await U.manualRepeat(null);assert.equal(U.practice.steps[q.id].repeat.score,null);assert.equal(U.practice.steps[q.id].repeat.method,'parent-confirm-v1');assert.match(U.render(),/data-study-action="next"/);assert.doesNotMatch(U.repeatSummary(U.practice),/平均匹配/);
+    await U.handle({dataset:{studyAction:'next'}});const q2=lesson.units[1].questions[0];await U.submit('answer',q2.answer);await U.manualRepeat(45);assert.equal(U.practice.steps[q2.id].correct,true);assert.equal(U.practice.steps[q2.id].repeat.score,45);assert.match(U.render(),/家长评分/);
+  }
+});
+
+test('manual cloud save retains event ID and score on retry and never advances before acknowledgement',async()=>{
+  const t=setup(),{U}=t;await U.beginPractice();const q=t.lesson.units[0].questions[0];await U.submit('answer',q.answer);let saved=U.practice,calls=[],fail=true;
+  U.configure({plan:()=>t.plan,render(){},practice:()=>saved,practiceEvent:async body=>{calls.push({...body});if(fail)return null;saved.steps[q.id].repeat={method:body.method,score:body.score,passed:true,transcript:''};saved.steps[q.id].correct=true;return {feedback:'repeat-pass'};}});
+  await U.manualRepeat(72);assert.equal(U.pending.method,'parent-score-v1');assert.equal(U.practice.steps[q.id].correct,false);assert.doesNotMatch(U.render(),/data-study-action="next"/);
+  fail=false;await U.handle({dataset:{studyAction:'retry'}});assert.equal(calls[0].eventId,calls[1].eventId);assert.equal(calls[1].score,72);assert.equal(U.pending,null);assert.match(U.render(),/data-study-action="next"/);
+});
+
+test('authored Chinese and math previews use their own grading without saving learning records',async()=>{
+  for(const type of ['chinese','math']){
+    const t=setup(type),{U}=t;
+    const lesson=JSON.parse(JSON.stringify(t.lesson));
+    const q=lesson.units[0].questions[0];
+    if(type==='math')Object.assign(q,{kind:'order',options:['小圆','中圆','大圆'],answer:['大圆','中圆','小圆'],
+      sizes:{小圆:24,中圆:48,大圆:75},editableOrder:true});
+    let reviewed=false;
+    U.startPreview(lesson,result=>{reviewed=result;});
+    assert.equal(U.subject,type);
+    assert.match(U.render(),/家长试玩/);
+    if(type==='chinese'){
+      await U.submit('answer',q.answer);
+      await U.manualRepeat(75);
+    }else{
+      await U.submit('answer','大圆');
+      assert.match(U.render(),/撤销上一步/);
+      await U.submit('undo-order');
+      assert.equal(U.preview.entry.steps[q.id].order.length,0);
+      for(const answer of q.answer)await U.submit('answer',answer);
+    }
+    assert.match(U.render(),/data-study-action="next"/);
+    await U.handle({dataset:{studyAction:'preview-done'}});
+    assert.equal(reviewed,true);
+    assert.equal(t.requests(),0);
+    assert.equal(JSON.stringify(t.plan),t.original);
+  }
+});

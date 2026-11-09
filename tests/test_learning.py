@@ -167,6 +167,133 @@ class EventApiTests(unittest.TestCase):
             with urlopen(req) as r:return r.status,json.load(r)
         except HTTPError as error:return error.code,json.load(error)
 
+    def test_authored_course_publishes_resumes_and_checks_in(self):
+        course = 'custom-' + secrets.token_hex(16)
+        words = server.course_builder.WORDS
+        builtin = learn.LESSONS['english-1']['units']
+        draft = {
+            'theme': '测试水果店', 'phase': '入门认知', 'goal': '认识水果和颜色',
+            'words': [{'en': en, 'cn': cn, 'image': f'fruit-{i}'} for i, (en, cn) in enumerate(words)],
+            'sentences': [{'en': unit['questions'][0]['speech'], 'cn': '示例句子', 'ref': i}
+                          for i, unit in enumerate(builtin[5:10])],
+            'story': [{'en': question['speech'], 'cn': '示例旁白', 'ref': i}
+                      for i, question in enumerate(builtin[10]['questions'])],
+        }
+
+        def edit(action, **values):
+            return self.call('/api/course-builder', dict(action=action, id=course, **values))
+
+        status, created = edit('create', draft=draft)
+        self.assertEqual(status, 200, created)
+        self.assertTrue(created['audio']['ready'])
+        status, result = edit('publish', revision=1, reviewed=True, planId='missing')
+        self.assertEqual(status, 400)
+        status, result = edit('publish', revision=1, reviewed=True)
+        self.assertEqual(status, 200, result)
+        version = result['publishedId']
+        self.addCleanup(learn.LESSONS.pop, version, None)
+        _, snapshot = self.call('/api/state')
+        self.assertNotIn('courseQueue', snapshot['state']['plans'][0])
+        status, result = edit('assign', revision=1, planId='p1')
+        self.assertEqual(status, 200, result)
+        _, snapshot = self.call('/api/state')
+        self.assertEqual(snapshot['state']['plans'][0]['courseQueue'], [version])
+        revision = snapshot['revision']
+
+        def step(action, **values):
+            nonlocal revision
+            status, result = self.call(body={**event(), 'eventId': secrets.token_hex(12),
+                'revision': revision, **values, 'action': action})
+            self.assertEqual(status, 200, result)
+            revision = result['revision']
+            return result
+
+        opened = step('open')
+        self.assertEqual(opened['state']['plans'][0]['records']['1']['study']['english']['lessonId'], version)
+        questions = learn.questions(learn.LESSONS[version])
+        self.assertEqual(len(questions), 13)
+        step('answer', questionId=questions[0]['id'], answer=questions[0]['answer'])
+        learn.LESSONS.pop(version)
+        server.initialize(self.db)
+        _, resumed = self.call('/curriculum.json')
+        self.assertEqual(resumed['lessons'][version]['theme'], draft['theme'])
+        _, snapshot = self.call('/api/state')
+        saved = snapshot['state']['plans'][0]['records']['1']['study']['english']
+        self.assertTrue(saved['steps'][questions[0]['id']]['choiceCorrect'])
+        for index, question in enumerate(questions):
+            if index:
+                step('answer', questionId=question['id'], answer=question['answer'])
+            result = step('repeat', questionId=question['id'], transcript=question['speech'])
+        self.assertTrue(result['result']['autoChecked'])
+        plan = result['state']['plans'][0]
+        self.assertTrue(learn.day_complete(plan, 1))
+        self.assertEqual(learn.ensure_entry(result['state'], plan, 2, 'english')['lessonId'], 'english-1')
+        edited = dict(draft, theme='新版水果店')
+        status, result = edit('save', revision=1, draft=edited)
+        self.assertEqual(status, 200, result)
+        status, result = edit('publish', revision=2, reviewed=True, planId='p1')
+        self.assertEqual(status, 400)
+        self.assertEqual(learn.LESSONS[version]['theme'], draft['theme'])
+
+    def test_dated_chinese_and_math_courses_keep_their_published_progress(self):
+        chars = '日月山水木'
+        drafts = [
+            dict(type='chinese', theme='公园', phase='', goal='',
+                 words=[{'cn': char} for char in chars],
+                 sentences=[{'cn': char + '在公园里。', 'ref': i} for i, char in enumerate(chars)],
+                 story=[{'cn': char + '在公园里。', 'ref': i} for i, char in enumerate(chars[:3])]),
+            dict(type='math', theme='水果篮', phase='', goal='',
+                 problems=[{'kind': 'order', 'prompt': '从大到小', 'direction': 'desc'}] +
+                          [{'kind': 'count', 'prompt': '数一数', 'left': '3', 'choices': '2,3,4'}] * 4),
+        ]
+        today = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
+        original_plans = self.call('/api/state')[1]['state']['plans']
+        for draft in drafts:
+            with self.subTest(subject=draft['type']):
+                course = 'custom-' + secrets.token_hex(16)
+
+                def edit(action, **values):
+                    return self.call('/api/course-builder', dict(action=action, id=course, **values))
+
+                status, result = edit('create', draft=draft)
+                self.assertEqual(status, 200, result)
+                status, result = edit('publish', revision=1, reviewed=True, date=today)
+                self.assertEqual(status, 200, result)
+                version = result['publishedId']
+                self.addCleanup(learn.LESSONS.pop, version, None)
+                assignment = result['assignments'][0]['id']
+                lesson = learn.LESSONS[version]
+
+                def step(action, **values):
+                    revision = self.call('/api/state')[1]['revision']
+                    status, result = self.call(body=dict(
+                        assignmentId=assignment, subject=draft['type'], action=action,
+                        revision=revision, eventId=secrets.token_hex(12), **values))
+                    self.assertEqual(status, 200, result)
+                    return next(item['entry'] for item in result['state']['courseAssignments'] if item['id'] == assignment)
+
+                step('open')
+                self.assertEqual(edit('cancel', revision=1, assignmentId=assignment)[0], 400)
+                questions = learn.questions(lesson)
+                first = questions[0]
+                if draft['type'] == 'chinese':
+                    self.assertEqual(lesson['optionWords']['日'], '日')
+                    step('answer', questionId=first['id'], answer=first['answer'])
+                    self.assertTrue(step('open')['steps'][first['id']]['choiceCorrect'])
+                    step('repeat', questionId=first['id'], transcript=first['speech'])
+                else:
+                    step('answer', questionId=first['id'], answer=first['answer'][0])
+                    self.assertEqual(step('open')['steps'][first['id']]['order'], first['answer'][:1])
+                    for answer in first['answer'][1:]:
+                        step('answer', questionId=first['id'], answer=answer)
+                for question in questions[1:]:
+                    entry = step('answer', questionId=question['id'], answer=question['answer'])
+                    if draft['type'] == 'chinese':
+                        entry = step('repeat', questionId=question['id'], transcript=question['speech'])
+                self.assertTrue(entry['completedAt'])
+                self.assertEqual(entry['lessonId'], version)
+                self.assertEqual(self.call('/api/state')[1]['state']['plans'], original_plans)
+
     def test_idempotency_reopen_and_put_cannot_forge_progress(self):
         body=dict(event(),eventId=secrets.token_hex(12),revision=0)
         status,opened=self.call(body=body);self.assertEqual(status,200)

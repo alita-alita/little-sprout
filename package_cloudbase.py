@@ -7,7 +7,9 @@ ROOT = Path(__file__).resolve().parent
 FILES = ['server.py','storage.py','cloudbase_http.py','cloud_server.py','cloudbase_server.py','learning.py','practice.py',
          'scf_bootstrap','requirements-cloudbase.txt','index.html','app.js','sync-model.js','model.js',
          'content.js','icons.js','study-model.js','study-ui.js','speech.js','repeat.js',
-         'english-audio.js','chinese-audio.js','curriculum.json','styles.css','v1.css','study.css']
+         'english-audio.js','chinese-audio.js','curriculum.json','styles.css','v1.css','study.css',
+         'course_editor.py','course_builder.py','course_images.py','editor_audio.py','course-editor.js',
+         'course-editor.css','course-builder.js','image-generator.js','image-options.js','tabletop.js']
 
 
 def build(destination, dependencies):

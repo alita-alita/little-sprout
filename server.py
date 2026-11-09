@@ -9,9 +9,13 @@ import secrets
 import re
 import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+import learning
 from learning import apply_event, validate_study
+import course_builder
 from practice import apply_practice_event, validate_practice
+import course_editor
+import course_images
 from storage import connect, DB_ERRORS, is_postgres
 from cloudbase_http import CloudBaseConflict
 
@@ -78,6 +82,22 @@ def validate(state):
                     require(text(value.get('time', ''), 60), '记录时间无效')
         validate_study(p)
         validate_practice(p)
+    assignments = state.get('courseAssignments', [])
+    require(isinstance(assignments, list) and len(assignments) <= 500 and (not assignments or child), '自编课安排无效')
+    assignment_ids = set()
+    for item in assignments:
+        require(isinstance(item, dict) and text(item.get('id'), 80) and item['id'] and item['id'] not in assignment_ids
+                and valid_date(item.get('date')), '自编课日期或标识无效')
+        assignment_ids.add(item['id'])
+        entry = item.get('entry')
+        require(isinstance(entry, dict), '自编课记录无效')
+        lesson = learning.LESSONS.get(entry.get('lessonId'), {})
+        subject = lesson.get('type')
+        require(lesson.get('courseId') and subject in ('chinese', 'math'), '缺少自编课程版本')
+        require(text(item.get('startedAt', ''), 60) and (item.get('startedAt') or not entry.get('steps')),
+                '自编课开始记录无效')
+        validate_study({'duration': 1, 'study': {'version': 1, 'startDay': 1, 'subjects': [subject]},
+                        'records': {'1': {'study': {subject: entry}}}})
     require(state.get('selectedPlanId') is None or state['selectedPlanId'] in ids, '所选计划不存在')
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
     active = [p for p in plans if p['status'] == 'active' and dt.date.fromisoformat(p['start']) + dt.timedelta(days=p['duration']) > today]
@@ -93,6 +113,9 @@ def initialize(db):
         connection.execute('CREATE TABLE IF NOT EXISTS revisions (revision INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS learning_events (id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT NOT NULL)')
         connection.execute('INSERT INTO state VALUES (1,0,?,?) ON CONFLICT (id) DO NOTHING', (json.dumps(EMPTY), dt.datetime.now(dt.timezone.utc).isoformat()))
+        if db != 'cloudbase+https' and not is_postgres(db):
+            course_builder.initialize(connection)
+            learning.LESSONS.update(course_builder.releases(connection))
         if is_postgres(db):
             for table in ('state', 'revisions', 'learning_events'):
                 connection.execute(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY')
@@ -143,8 +166,36 @@ class Handler(SimpleHTTPRequestHandler):
                         return self.json_response(200, {'unchanged': True, 'revision': current})
                 revision, payload, updated = connection.execute('SELECT revision,payload,updated FROM state WHERE id=1').fetchone()
             return self.json_response(200, {'revision': revision, 'state': json.loads(payload), 'updated': updated, 'token': self.request_token, 'cloud': bool(getattr(self.server, 'cloud', False))})
+        if path == '/api/course-images':
+            if getattr(self.server,'cloud',False):return self.json_response(501,{'error':'图片生成目前在本机使用'})
+            try:
+                ident=parse_qs(urlsplit(self.path).query).get('id',[None])[0]
+                return self.json_response(200,course_images.job(ident) if ident else course_images.status())
+            except ValueError as error:return self.json_response(400,{'error':str(error)})
+        if path == '/api/course-builder':
+            if getattr(self.server, 'cloud', False):
+                return self.json_response(501, {'error': '请在本机版创建和安排课程'})
+            ident = parse_qs(urlsplit(self.path).query).get('id', [None])[0]
+            try:
+                with connect(self.server.db) as connection:
+                    result = course_builder.get(connection, ident) if ident else course_builder.summary(connection)
+                return self.json_response(200, result)
+            except ValueError as error:
+                return self.json_response(400, {'error': str(error)})
+        if path == '/curriculum.json' and not getattr(self.server, 'cloud', False):
+            with connect(self.server.db) as connection:
+                authored = course_builder.releases(connection)
+            lessons = {key: value for key, value in learning.LESSONS.copy().items() if not value.get('courseId')}
+            return self.json_response(200, {**learning.CATALOG, 'lessons': {**lessons, **authored}})
+        if path == '/api/courses':
+            if getattr(self.server,'cloud',False):return self.json_response(501,{'error':'课程编辑目前在本机使用，云端管理尚未启用'})
+            try:
+                base=parse_qs(urlsplit(self.path).query).get('id',['english-1'])[0]
+                with connect(self.server.db) as connection:return self.json_response(200,course_editor.get(connection,base))
+            except ValueError as error:return self.json_response(400,{'error':str(error)})
         # Explicit static allowlist prevents serving the database or Python source.
-        if not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/repeat.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/sync-model.js', '/app.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
+        picture=bool(re.fullmatch(r'/assets/pictures/[a-f0-9]{24}\.(png|jpg)',path))
+        if not picture and not re.fullmatch(r'/assets/audio/(?:en|zh)/[a-f0-9]{24}\.(?:wav|mp3)', path) and path not in ['/', '/index.html', '/styles.css', '/v1.css', '/study.css', '/icons.js', '/content.js', '/curriculum.json', '/study-model.js', '/study-ui.js', '/speech.js', '/repeat.js', '/english-audio.js', '/chinese-audio.js', '/model.js', '/sync-model.js', '/app.js', '/course-editor.js', '/course-builder.js', '/tabletop.js', '/assets/course-fruits.png', '/course-editor.css', '/image-options.js', '/image-generator.js', '/assets/garden.png', '/assets/sprout.png', '/favicon.ico']:
             return self.json_response(404, {'error': '页面不存在'})
         if path == '/favicon.ico':
             self.send_response(204)
@@ -173,9 +224,11 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.json_response(409, {'error': '另一页面已更新记录，请重新加载后再试'})
                 if not body.get('restore'):
                     old_state = json.loads(old_payload)
+                    require(state.get('courseAssignments', []) == old_state.get('courseAssignments', []), '请通过课程管理修改安排')
                     old_plans = {p['id']: p for p in old_state['plans']}
                     for plan in state['plans']:
                         old = old_plans.get(plan['id'], {})
+                        require(plan.get('courseQueue', []) == old.get('courseQueue', []), '课程安排请通过课程管理保存')
                         if old.get('study'):
                             require(plan.get('study') == old['study'], '进行中的自主学习设置不能直接改写')
                         for day in set(old.get('records', {})) | set(plan['records']):
@@ -198,6 +251,45 @@ class Handler(SimpleHTTPRequestHandler):
         expected_origin = self.expected_origin()
         if not self.allowed() or self.headers.get('Origin', expected_origin) != expected_origin or self.headers.get('X-Sprout-Token') != self.request_token:
             return self.json_response(403, {'error': '请重新打开本机应用后继续学习'})
+        if self.path == '/api/course-images':
+            if getattr(self.server,'cloud',False):return self.json_response(501,{'error':'图片生成目前在本机使用'})
+            try:
+                length=int(self.headers.get('Content-Length',0));require(0<length<=4096,'图片请求无效')
+                body=json.loads(self.rfile.read(length))
+                if body.get('action')=='configure':result=course_images.configure(body)
+                elif body.get('action')=='approve':result=course_images.approve(body.get('id'))
+                elif body.get('action')=='generate':result=course_images.start(body)
+                else:raise ValueError('图片操作无效')
+                return self.json_response(200,result)
+            except (ValueError,TypeError,KeyError,AttributeError) as error:return self.json_response(400,{'error':str(error)})
+        if self.path == '/api/course-builder':
+            if getattr(self.server, 'cloud', False):
+                return self.json_response(501, {'error': '请在本机版创建和安排课程'})
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                require(0 < length <= 262144, '课程内容过大')
+                body = json.loads(self.rfile.read(length))
+                with connect(self.server.db) as connection:
+                    if body.get('action') != 'audio':
+                        connection.execute('BEGIN IMMEDIATE')
+                    result = course_builder.act(connection, body)
+                    if body.get('action') == 'publish':
+                        learning.LESSONS.update(course_builder.releases(connection))
+                return self.json_response(200, result)
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                return self.json_response(400, {'error': str(error) if isinstance(error, ValueError) else '课程内容格式不正确'})
+            except DB_ERRORS:
+                return self.json_response(503, {'error': '暂时无法保存课程，请重试'})
+        if self.path == '/api/courses':
+            if getattr(self.server,'cloud',False):return self.json_response(501,{'error':'课程编辑目前在本机使用，云端管理尚未启用'})
+            try:
+                length=int(self.headers.get('Content-Length',0))
+                require(0<length<=262144,'课程内容过大')
+                body=json.loads(self.rfile.read(length))
+                with connect(self.server.db) as connection:result=course_editor.act(connection,body)
+                return self.json_response(200,result)
+            except (ValueError,TypeError,KeyError,AttributeError) as error:return self.json_response(400,{'error':str(error)})
+            except DB_ERRORS:return self.json_response(503,{'error':'草稿暂时没有保存，请重试'})
         if self.path not in ['/api/study-event', '/api/practice-event']:
             return self.json_response(404, {'error': '接口不存在'})
         try:
@@ -227,7 +319,7 @@ class Handler(SimpleHTTPRequestHandler):
                 connection.execute('UPDATE state SET revision=?,payload=?,updated=? WHERE id=1', (revision+1, json.dumps(state, ensure_ascii=False), updated))
                 connection.execute('INSERT INTO learning_events VALUES (?,?,?)', (body['eventId'], event_request, json.dumps(result)))
             response = {'revision': revision+1, 'updated': updated, 'result': result}
-            if self.headers.get('X-Sprout-Delta') == '1':
+            if self.headers.get('X-Sprout-Delta') == '1' and not body.get('assignmentId'):
                 plan = next(p for p in state['plans'] if p['id'] == body['planId'])
                 response['patch'] = {'planId': plan['id'], 'day': body['day'],
                                      'record': plan['records'][str(body['day'])],

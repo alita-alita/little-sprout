@@ -4,8 +4,9 @@
 
 ## 保存与同步
 
-- `storage.py` 支持本地 SQLite、PostgreSQL 原生连接或 CloudBase HTTPS SQL 接口。免费共享集群使用 HTTPS，无需开通数据库外网或升级独享实例。
+- `storage.py` 支持本地 SQLite、PostgreSQL 原生连接或 CloudBase HTTPS RPC 接口。免费共享集群使用 HTTPS，无需开通数据库外网或升级独享实例。
 - 正式学习、跟读识别文字及分数、打卡结果、家长观察、复习轮次都保存到数据库。
+- 跟读支持家长手动确认（不打分）与0—100整数评分，两者保存后均可继续；分别标记 parent-confirm-v1 / parent-score-v1，不伪造识别文字，不混入自动匹配平均分。沿用原状态 JSON 与事件去重结构，无需新增表或执行 SQL。
 - 复习保存在每天记录的 `practice` 字段，与正式 `study` 分开。保存每科最新一轮及轮次计数；开始下一轮后不提供过去每轮的单独浏览。
 - 刷新或换设备登录后，打开同一课会接着未完成的复习。已有课程完成记录不受复习影响，不重复计入打卡和成长统计。
 - 云端写入用事务、行锁及全局版本号，重复事件以唯一标识去重。冲突需读取最新记录，不自动覆盖其他设备。
@@ -20,7 +21,9 @@
 
 家庭登录沿用自建单家庭账号和 Secure/HttpOnly Cookie，不依赖 CloudBase 终端用户注册。密钥、数据库密码、会话原始令牌不进入网页源码、Git 或应用日志。登录错误限流、会话到期、当前设备退出及重设密码失效规则保留。
 
-共享集群 HTTPS 模式使用服务端专用 API Key；官方 SQL 接口以 `cloudbase_postgres` 管理角色执行，能绕过 RLS，因此该 Key 只能填云函数环境变量，不能填前端。建议专用 CloudBase 环境，不与其他业务共享。私有事务函数使用 SECURITY INVOKER 且撤销 PUBLIC 执行权限；不要给 `anon` 或 `authenticated` 开放内部表或函数。
+共享集群 HTTPS 模式使用服务端专用 API Key，经 `/v1/rdb/rest/rpc/sprout_server_bridge` 调用事务函数。此前 `exec-pgsql` 在实际环境以带实例后缀的只读角色执行，与文档描述不同；不再使用该接口，也不向平台内置只读角色授予写权限。
+
+公开 schema 仅增加一个 SECURITY INVOKER 的 RPC 包装函数；业务表仍在私有 schema。包装函数显式检查受网关验证的 JWT claims 中 role 必须为 `service_role`，缺失或其他身份一律拒绝，不只依赖网关的函数 EXECUTE 检查。数据库脚本仅向已存在的 `service_role` 授予私有 schema 使用权、六张表的 DML 和两个私有函数执行权。它具备 BYPASSRLS，API Key 只能填云函数环境变量，不能填前端。建议专用 CloudBase 环境，不与其他业务共享。
 
 若使用独享实例原生连接，推荐专用数据库角色拥有 `sprout` schema 及其表；初始化与运行角色不同时需核对权限。
 
@@ -45,7 +48,7 @@ HTTPS 模式使用系统 CA 验证腾讯云网关证书，拒绝重定向，避�
 
 不使用本地终端时，可在 CloudBase「数据库 → SQL 编辑器」打开并整段执行 `sql/init_cloudbase.sql`，再执行 `sql/check_cloudbase.sql` 核对6张表的 RLS 和3项初始化状态。脚本不删除表、不覆盖数据，也不会替换已有登录盐；不需要填写任何密码。后续运行时数据库账号仍需具备该私有 schema 的访问权限。
 
-**免费共享集群还需执行 `sql/cloudbase_http_bridge.sql`**，返回 `http_bridge_ready=true`。这只增加两个私有函数，不改变现有表或记录；可重复执行。所有运行时读取通过 HTTPS SQL 接口；一次保存的写入在单次函数调用中持有行锁、重新核对读取快照后原子提交。若另一设备已修改，返回409，由前端重新读取；网络失败返回503，原事件 ID 可安全重试。不能把跨 HTTP 请求的 BEGIN/COMMIT 当作一个事务。
+**免费共享集群还需依次执行 `sql/cloudbase_http_bridge.sql` 和 `sql/cloudbase_rpc_bridge.sql`**，分别返回 `http_bridge_ready=true` 和 `rpc_bridge_ready=true`。脚本可重复执行，不删除或覆盖学习记录。前者增加私有事务函数，后者增加受身份检查的 RPC 包装及 `service_role` 所需权限。所有运行时读取通过 HTTPS RPC 接口；一次保存的写入在单次函数调用中持有行锁、重新核对读取快照后原子提交。若另一设备已修改，返回409，由前端重新读取；网络失败返回503，原事件 ID 可安全重试。不能把跨 HTTP 请求的 BEGIN/COMMIT 当作一个事务。
 
 共享版无需数据库密码、外网地址、安全组或数据库 SSL 开关。不能使用下述原生连接命令直接连接免费共享实例；已有数据用在线版家长空间恢复 JSON 备份。
 
